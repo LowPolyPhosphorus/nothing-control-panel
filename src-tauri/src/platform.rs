@@ -24,6 +24,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN,
 };
 
+/// A transparent WebView2 window has no desktop content in its own backdrop,
+/// so CSS `backdrop-filter` samples only transparent pixels and does nothing.
+/// The real blur has to be applied to the HWND by DWM. `apply_acrylic` uses the
+/// Windows 11 transient-window backdrop (the same material flyouts use) and
+/// falls back to ACCENT_ENABLE_ACRYLICBLURBEHIND on older builds.
+pub fn apply_popup_backdrop<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(), String> {
+    window_vibrancy::apply_acrylic(window, None).map_err(|error| error.to_string())
+}
+
+pub fn clear_popup_backdrop<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    let _ = window_vibrancy::clear_acrylic(window);
+}
+
 const POPUP_WIDTH: f32 = 360.0;
 const POPUP_HEIGHT: f32 = 700.0;
 

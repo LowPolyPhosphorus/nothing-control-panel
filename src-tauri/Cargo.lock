@@ -508,6 +508,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tracing",
  "tracing-subscriber",
+ "window-vibrancy",
  "windows 0.61.3",
 ]
 

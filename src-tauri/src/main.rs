@@ -201,7 +201,7 @@ pub(crate) fn patch_runtime(app: &AppHandle, change: impl FnOnce(&mut AppRuntime
 }
 
 fn create_popup_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
-    WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
+    let window = WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
         .title("CMF Buds Pro 2")
         .inner_size(360.0, 700.0)
         .min_inner_size(360.0, 700.0)
@@ -213,7 +213,13 @@ fn create_popup_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewW
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false)
-        .build()
+        .build()?;
+
+    match platform::apply_popup_backdrop(&window) {
+        Ok(()) => info!("native acrylic backdrop applied to popup"),
+        Err(error) => warn!("failed to apply acrylic backdrop: {error}"),
+    }
+    Ok(window)
 }
 
 /// Claim the animation slot so a second click cannot start a competing slide.
@@ -277,6 +283,12 @@ fn hide_popup_window<R: Runtime>(window: &WebviewWindow<R>) {
 /// the webview is unresponsive. The sheet clips at the taskbar top, so the
 /// native window never draws over the taskbar.
 fn request_hide_popup<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("popup") {
+        // The sheet slides out inside the window. Remove the window-level
+        // backdrop first so no empty blurred rectangle is left behind while
+        // the content animates away.
+        platform::clear_popup_backdrop(&window);
+    }
     let _ = app.emit("popup-close-request", ());
     let watcher_app = app.clone();
     std::thread::spawn(move || {
@@ -341,6 +353,9 @@ fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
     let Some(flag) = begin_animation(app) else {
         return;
     };
+    if let Err(error) = platform::apply_popup_backdrop(&window) {
+        warn!("failed to reapply popup backdrop: {error}");
+    }
     let (x, y, bottom) = platform::popup_geometry();
     // Start flush with the taskbar and slide up, like a Windows flyout.
     let start_y = bottom;

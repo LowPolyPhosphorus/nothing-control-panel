@@ -1,6 +1,8 @@
 /* Apple liquid-glass inspired popup, modelled on 3kh0/buds StatusView.swift.
-   The Tauri window is transparent and frameless, so backdrop-filter samples
-   the real desktop behind it. No dark tint and no decorative fake artwork. */
+   The real blur of the desktop comes from the native Windows transient/acrylic
+   backdrop applied to the HWND in platform.rs: a transparent WebView2 window
+   has nothing in its own backdrop for CSS backdrop-filter to sample. The
+   values below are only the neutral veil drawn on top of that blur. */
 :root {
   color-scheme: dark;
   --accent: #0a84ff;
@@ -11,7 +13,8 @@
   --muted: rgba(255, 255, 255, 0.68);
   --dim: rgba(255, 255, 255, 0.44);
   --card: rgba(255, 255, 255, 0.035);
-  --glass: rgba(255, 255, 255, 0.14);
+  /* Native acrylic already lightens the backdrop; keep this veil subtle. */
+  --glass: rgba(255, 255, 255, 0.06);
   --hairline: rgba(255, 255, 255, 0.08);
   --radius: 24px;
 }
@@ -65,6 +68,9 @@ button {
   overflow: hidden;
   isolation: isolate;
   background: var(--glass);
+  /* Progressive enhancement only: on Windows the visible blur is the native
+     DWM acrylic backdrop. WebView2 cannot sample the desktop through a
+     transparent window, so this has no effect there but is harmless. */
   -webkit-backdrop-filter: blur(56px) saturate(180%);
   backdrop-filter: blur(56px) saturate(180%);
   /* No window-like outline: only a soft outside shadow. */
