@@ -1,5 +1,8 @@
-const core = window.__TAURI__?.core;
-const events = window.__TAURI__?.event;
+// Tauri v2 only injects `window.__TAURI__` when the npm global API script was
+// generated (it isn't for this dependency-free project). The low-level
+// `window.__TAURI_INTERNALS__` bridge is always present, so talk to it directly.
+const internals = window.__TAURI_INTERNALS__;
+const inTauri = typeof internals?.invoke === "function";
 
 // Raw ANC strengths (1..4) are the source of truth; the quirky ear-web UI
 // level translation lives in the Rust protocol module and has its own test.
@@ -23,8 +26,26 @@ const ANC_ORDER = ["anc", "transparency", "off"];
 
 let state = null;
 
+let toastTimer = null;
+function showError(message) {
+  console.error("[cmf-tray]", message);
+  const toast = el("toast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.hidden = true;
+  }, 4000);
+}
+
 function invoke(name, args = {}) {
-  if (core) return core.invoke(name, args);
+  if (inTauri) {
+    return internals.invoke(name, args).catch((error) => {
+      const detail = typeof error === "string" ? error : JSON.stringify(error);
+      showError(`${name} failed: ${detail}`);
+    });
+  }
   // Browser preview fallback: keep the UI explorable without Tauri.
   if (name === "connect") state.connected = true;
   if (name === "disconnect") state.connected = false;
@@ -36,6 +57,21 @@ function invoke(name, args = {}) {
   if (name === "set_in_ear") state.in_ear_detection = args.enabled;
   render(state);
   return Promise.resolve();
+}
+
+/// Subscribe to a Rust event without the npm API package.
+async function listen(event, handler) {
+  if (!inTauri) return () => {};
+  const callbackId = internals.transformCallback((data) => handler(data), false);
+  const eventId = await internals.invoke("plugin:event|listen", {
+    event,
+    target: { kind: "Any" },
+    handler: callbackId,
+  });
+  return async () => {
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__?.unregisterListener?.(event, eventId);
+    await internals.invoke("plugin:event|unlisten", { event, eventId });
+  };
 }
 
 function battery(value, barId, valueId, chargeId) {
@@ -111,9 +147,13 @@ function wire() {
     );
   });
 
-  ui.inEar.addEventListener("change", () =>
-    invoke("set_in_ear", { enabled: ui.inEar.checked }),
-  );
+  ui.inEar.addEventListener("change", () => {
+    const requested = ui.inEar.checked;
+    // Never let the browser pretend the buds changed: revert immediately and
+    // wait for the decoded response from Rust to update the switch.
+    ui.inEar.checked = state?.in_ear_detection ?? false;
+    invoke("set_in_ear", { enabled: requested });
+  });
 
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") invoke("hide_popup");
@@ -122,11 +162,9 @@ function wire() {
 
 async function start() {
   wire();
-  if (events?.listen) {
-    await events.listen("state-changed", (event) => render(event.payload));
-  }
-  const initial = core
-    ? await core.invoke("get_state")
+  await listen("state-changed", (event) => render(event.payload));
+  const initial = inTauri
+    ? await invoke("get_state")
     : {
         device_name: "CMF BUDS PRO 2",
         connected: false,

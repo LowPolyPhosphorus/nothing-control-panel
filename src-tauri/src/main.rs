@@ -3,6 +3,7 @@
 mod device;
 mod platform;
 mod protocol;
+mod rfcomm;
 mod settings;
 mod state;
 

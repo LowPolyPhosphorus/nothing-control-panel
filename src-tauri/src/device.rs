@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serialport::{available_ports, SerialPort, SerialPortType};
+use serialport::{available_ports, SerialPortType};
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
@@ -19,6 +19,7 @@ use crate::{
     patch_runtime,
     platform,
     protocol::{self as proto, AncMode},
+    rfcomm,
     settings::{self, Settings},
     state::{AppRuntime, BatteryState},
 };
@@ -29,6 +30,14 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const ACK_TIMEOUT: Duration = Duration::from_millis(2000);
 const BASE_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Anything with serial-port-like I/O can back the device link. Both the
+/// WinRT RFCOMM stream (custom control UUID) and `serialport` (legacy fallback)
+/// qualify, so the manager itself stays transport-agnostic.
+// `Send` is deliberately not required: the manager and its transports live
+// and die on the single device thread.
+trait Transport: Read + Write {}
+impl<T: Read + Write> Transport for T {}
 
 #[derive(Debug)]
 pub enum Command {
@@ -57,7 +66,7 @@ pub fn spawn(app: AppHandle, commands: mpsc::Receiver<Command>) {
 struct DeviceManager {
     app: AppHandle,
     commands: mpsc::Receiver<Command>,
-    port: Option<Box<dyn SerialPort>>,
+    port: Option<Box<dyn Transport>>,
     port_name: String,
     reassembler: proto::FrameReassembler,
     op_id: u8,
@@ -97,6 +106,8 @@ impl DeviceManager {
     }
 
     fn run(mut self) {
+        // WinRT RFCOMM activation needs an MTA on this thread.
+        rfcomm::init_com();
         info!("device manager thread started");
         loop {
             match self.commands.recv_timeout(Duration::from_millis(40)) {
@@ -191,6 +202,26 @@ impl DeviceManager {
             (settings.manual_com_port.clone(), settings.last_port.clone())
         });
 
+        // The control protocol lives on a custom RFCOMM UUID that Windows does
+        // not surface as a COM port. A direct WinRT StreamSocket is therefore
+        // the only way to reach it; only an explicit COM override bypasses it.
+        if manual.is_none() {
+            info!(
+                "opening RFCOMM control service {}",
+                rfcomm::CONTROL_SERVICE_UUID
+            );
+            match rfcomm::open(None) {
+                Ok(stream) => {
+                    let label = stream.label();
+                    info!("connected via {label}");
+                    self.port = Some(Box::new(stream));
+                    self.mark_connected(label);
+                    return;
+                }
+                Err(error) => warn!("RFCOMM control channel unavailable: {error}"),
+            }
+        }
+
         let ports = match available_ports() {
             Ok(ports) => ports,
             Err(error) => {
@@ -246,25 +277,13 @@ impl DeviceManager {
             .open()
         {
             Ok(port) => {
-                info!("connected to {name}");
-                self.port = Some(port);
-                self.port_name = name.clone();
-                self.retry_at = None;
-                self.backoff = BASE_BACKOFF;
-                self.op_id = 0;
-                self.connected_at = Some(Instant::now());
-                self.last_frame_at = None;
-                self.waiting_notified = false;
-                self.next_poll = Instant::now() + POLL_INTERVAL;
+                info!("connected to {name} (COM fallback)");
+                self.port = Some(Box::new(port));
+                self.mark_connected(name.clone());
                 with_settings_mut(&self.app, |settings| {
-                    settings.last_port = Some(name.clone());
+                    settings.last_port = Some(name);
                     settings.last_device = Some("CMF Buds Pro 2".to_string());
                     settings::save(settings);
-                });
-                patch_runtime(&self.app, |runtime| {
-                    runtime.connected = true;
-                    runtime.port = name;
-                    runtime.status = "Connected".to_string();
                 });
                 self.initial_reads();
             }
@@ -273,6 +292,22 @@ impl DeviceManager {
                 self.schedule_retry(&format!("Could not open {name}"));
             }
         }
+    }
+
+    fn mark_connected(&mut self, label: String) {
+        self.port_name = label.clone();
+        self.retry_at = None;
+        self.backoff = BASE_BACKOFF;
+        self.op_id = 0;
+        self.connected_at = Some(Instant::now());
+        self.last_frame_at = None;
+        self.waiting_notified = false;
+        self.next_poll = Instant::now() + POLL_INTERVAL;
+        patch_runtime(&self.app, |runtime| {
+            runtime.connected = true;
+            runtime.port = label;
+            runtime.status = "Connected".to_string();
+        });
     }
 
     // ---- I/O --------------------------------------------------------------

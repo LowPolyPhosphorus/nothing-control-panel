@@ -151,7 +151,12 @@ impl FrameReassembler {
             let crc_valid = if has_crc {
                 let expected =
                     u16::from_le_bytes([self.buf[total - 2], self.buf[total - 1]]);
-                Some(expected == crc16(&self.buf[..total - 2]))
+                // Outgoing frames CRC the whole frame (header + payload), but
+                // the buds' incoming frames CRC only the payload. Accept
+                // either convention — both are seen across ear-web firmware.
+                let whole_frame = crc16(&self.buf[..total - 2]);
+                let payload_only = crc16(&payload);
+                Some(expected == whole_frame || expected == payload_only)
             } else {
                 None
             };
@@ -437,6 +442,25 @@ mod tests {
         assert_eq!(frames[0].op_id, 1);
         assert!(frames[0].payload.is_empty());
         assert_eq!(frames[0].crc_valid, Some(true));
+    }
+
+    #[test]
+    fn reassembler_accepts_payload_only_crc_from_device() {
+        // Real frames captured over RFCOMM: the buds CRC the payload only.
+        let battery = parse_hex("55 60 01 07 40 03 00 31 01 03 46 A1 02");
+        let anc = parse_hex("55 60 01 1E 40 06 00 32 02 01 00 01 07 00 6F C9");
+        let mut reassembler = FrameReassembler::new();
+        let frames = reassembler.push(&[battery, anc].concat());
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].command, RESP_BATTERY);
+        assert_eq!(frames[0].crc_valid, Some(true));
+        assert_eq!(frames[1].command, RESP_ANC);
+        assert_eq!(frames[1].crc_valid, Some(true));
+        assert_eq!(parse_battery(&frames[0].payload).unwrap().right.unwrap().percent, 70);
+        assert_eq!(
+            parse_anc(&frames[1].payload).unwrap().mode,
+            AncMode::Transparency
+        );
     }
 
     #[test]
