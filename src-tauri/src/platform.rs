@@ -25,12 +25,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const POPUP_WIDTH: f32 = 360.0;
-const POPUP_HEIGHT: f32 = 640.0;
+const POPUP_HEIGHT: f32 = 700.0;
 
 /// Physical-pixel position for the popup, anchored just above the taskbar on
 /// the monitor containing the cursor. `rcWork` already accounts for taskbar
-/// position and auto-hide, and `GetDpiForMonitor` handles scaling.
-pub fn popup_position() -> (i32, i32) {
+/// position and auto-hide, and `GetDpiForMonitor` handles scaling. The third
+/// value is the work-area bottom, used as the slide-out/down destination.
+pub fn popup_geometry() -> (i32, i32, i32) {
     unsafe {
         let mut cursor = POINT::default();
         if GetCursorPos(&mut cursor).is_ok() {
@@ -47,10 +48,11 @@ pub fn popup_position() -> (i32, i32) {
                 let width = scale(POPUP_WIDTH, dpi_x);
                 let height = scale(POPUP_HEIGHT, dpi_y);
                 let margin = scale(8.0, dpi_x);
-                return (
-                    info.rcWork.right - width - margin,
-                    info.rcWork.bottom - height - margin,
-                );
+                // Clamp both axes so a small display can never push the panel
+                // off screen (the old code only subtracted, no lower bound).
+                let x = (info.rcWork.right - width - margin).max(info.rcWork.left + margin);
+                let y = (info.rcWork.bottom - height - margin).max(info.rcWork.top + margin);
+                return (x, y, info.rcWork.bottom);
             }
         }
     }
@@ -59,9 +61,12 @@ pub fn popup_position() -> (i32, i32) {
     unsafe {
         let width = POPUP_WIDTH as i32;
         let height = POPUP_HEIGHT as i32;
+        let screen_x = GetSystemMetrics(SM_CXSCREEN);
+        let screen_y = GetSystemMetrics(SM_CYSCREEN);
         (
-            GetSystemMetrics(SM_CXSCREEN) - width - 8,
-            GetSystemMetrics(SM_CYSCREEN) - height - 8,
+            (screen_x - width - 8).max(8),
+            (screen_y - height - 8).max(8),
+            screen_y,
         )
     }
 }

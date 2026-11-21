@@ -8,7 +8,10 @@ mod settings;
 mod state;
 
 use std::{
-    sync::{mpsc::Sender, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender, Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,7 +23,7 @@ use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, Position, RunEvent, Runtime, WebviewUrl,
-    WebviewWindowBuilder, Wry,
+    WebviewWindow, WebviewWindowBuilder, Wry,
 };
 use tracing::{info, warn};
 
@@ -30,6 +33,12 @@ struct UiHandles<R: Runtime> {
     tray: TrayIcon<R>,
     connect_item: MenuItem<R>,
     autostart_item: CheckMenuItem<R>,
+}
+
+#[derive(Default)]
+struct PopupState {
+    /// Prevents a tray click racing an in-flight slide animation.
+    animating: Arc<AtomicBool>,
 }
 
 fn main() {
@@ -55,6 +64,7 @@ fn main() {
         .manage(Mutex::new(stored_settings))
         .manage(Mutex::new(AppRuntime::default()))
         .manage(Mutex::new(device_tx))
+        .manage(Mutex::new(PopupState::default()))
         .invoke_handler(tauri::generate_handler![
             get_state,
             connect,
@@ -91,7 +101,7 @@ fn main() {
             let menu = Menu::with_items(app, &[&connect_item, &autostart_item, &quit_item])?;
 
             let tray = TrayIconBuilder::with_id("main-tray")
-                .icon(Image::from_bytes(include_bytes!("../icons/icon.png")).expect("tray icon"))
+                .icon(Image::from_bytes(include_bytes!("../icons/tray-case.png")).expect("tray icon"))
                 .tooltip("CMF Buds Pro 2 — disconnected")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -129,6 +139,13 @@ fn main() {
                 connect_item,
                 autostart_item,
             });
+
+            // Build the WebView once and keep it hidden. Showing a preloaded
+            // window is instant; creating one per click made WebView2 cold-start
+            // every time and felt like launching a separate app.
+            create_popup_window(app.app_handle())?;
+            spawn_outside_watcher(app.app_handle().clone());
+
             emit_state(app.app_handle());
 
             // Auto-connect on launch using the remembered/last Bluetooth port.
@@ -183,6 +200,109 @@ pub(crate) fn patch_runtime(app: &AppHandle, change: impl FnOnce(&mut AppRuntime
     emit_state(app);
 }
 
+fn create_popup_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewWindow<R>> {
+    WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
+        .title("CMF Buds Pro 2")
+        .inner_size(360.0, 700.0)
+        .min_inner_size(360.0, 700.0)
+        .max_inner_size(360.0, 700.0)
+        .resizable(false)
+        .decorations(false)
+        .shadow(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .build()
+}
+
+/// Claim the animation slot so a second click cannot start a competing slide.
+fn begin_animation<R: Runtime>(app: &AppHandle<R>) -> Option<Arc<AtomicBool>> {
+    let flag = app
+        .state::<Mutex<PopupState>>()
+        .lock()
+        .unwrap()
+        .animating
+        .clone();
+    if flag
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return None;
+    }
+    Some(flag)
+}
+
+fn slide_popup<R: Runtime>(
+    window: &WebviewWindow<R>,
+    x: i32,
+    from_y: i32,
+    to_y: i32,
+    hide_after: bool,
+    flag: Arc<AtomicBool>,
+) {
+    let window = window.clone();
+    std::thread::spawn(move || {
+        const STEPS: u32 = 14;
+        const STEP_MS: u64 = 11;
+        for step in 0..=STEPS {
+            let t = step as f32 / STEPS as f32;
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let y = from_y + ((to_y - from_y) as f32 * eased).round() as i32;
+            if window
+                .set_position(Position::Physical(PhysicalPosition::new(x, y)))
+                .is_err()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(STEP_MS));
+        }
+        if hide_after {
+            let _ = window.hide();
+        }
+        flag.store(false, Ordering::SeqCst);
+    });
+}
+
+fn hide_popup_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
+    let Some(flag) = begin_animation(app) else {
+        return;
+    };
+    let (x, _, bottom) = platform::popup_geometry();
+    let current_y = window.outer_position().map(|position| position.y).unwrap_or(bottom);
+    slide_popup(window, x, current_y, bottom, true, flag);
+}
+
+/// One watcher for the lifetime of the app. The window stays alive while
+/// hidden, so it must only close on an outside click when actually visible.
+fn spawn_outside_watcher<R: Runtime>(app: AppHandle<R>) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(40));
+        let Some(window) = app.get_webview_window("popup") else {
+            continue;
+        };
+        if !window.is_visible().unwrap_or(false) {
+            continue;
+        }
+        let animating = app
+            .state::<Mutex<PopupState>>()
+            .lock()
+            .unwrap()
+            .animating
+            .load(Ordering::SeqCst);
+        if animating {
+            continue;
+        }
+        let Some(hwnd) = window.hwnd().ok().map(|handle| handle.0 as isize) else {
+            continue;
+        };
+        if platform::left_click_outside(hwnd) {
+            info!("outside click -> close popup");
+            hide_popup_window(&app, &window);
+        }
+    });
+}
+
 fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
     let now = now_ms();
     {
@@ -195,62 +315,31 @@ fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
         runtime.last_tray_click_ms = now;
     }
 
-    if let Some(window) = app.get_webview_window("popup") {
-        let _ = window.close();
+    let Some(window) = app.get_webview_window("popup") else {
+        return;
+    };
+
+    if window.is_visible().unwrap_or(false) {
+        hide_popup_window(app, &window);
         return;
     }
 
-    let (x, y) = platform::popup_position();
-    let window = match WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
-        .title("CMF Buds Pro 2")
-        .inner_size(360.0, 720.0)
-        .min_inner_size(360.0, 720.0)
-        .max_inner_size(360.0, 720.0)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible(false)
-        .build()
-    {
-        Ok(window) => window,
-        Err(error) => {
-            warn!("failed to create popup window: {error}");
-            return;
-        }
+    let Some(flag) = begin_animation(app) else {
+        return;
     };
-
-    let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
-
-    let hwnd = window.hwnd().ok().map(|handle| handle.0 as isize);
-    let watcher_app = app.clone();
-    std::thread::spawn(move || {
-        let Some(hwnd) = hwnd else {
-            return;
-        };
-        let opened = now_ms();
-        loop {
-            std::thread::sleep(Duration::from_millis(40));
-            if watcher_app.get_webview_window("popup").is_none() {
-                break;
-            }
-            // Give WebView2 time to paint before accepting a close signal.
-            if now_ms().saturating_sub(opened) < 350 {
-                continue;
-            }
-            if platform::left_click_outside(hwnd) {
-                info!("outside click -> close popup");
-                if let Some(popup) = watcher_app.get_webview_window("popup") {
-                    let _ = popup.close();
-                }
-                break;
-            }
-        }
-    });
-
+    let (x, y, bottom) = platform::popup_geometry();
+    // Start flush with the taskbar and slide up, like a Windows flyout.
+    let start_y = bottom;
+    let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, start_y)));
     let _ = window.show();
     let _ = window.set_focus();
+    // Windows may clamp a partially off-screen window when it is shown; use
+    // the real position so the slide always starts where the panel actually is.
+    let actual_y = window
+        .outer_position()
+        .map(|position| position.y)
+        .unwrap_or(start_y);
+    slide_popup(&window, x, actual_y, y, false, flag);
     info!("popup opened at physical position ({x}, {y})");
 }
 
@@ -360,7 +449,7 @@ fn set_in_ear(app: AppHandle, enabled: bool) {
 #[tauri::command]
 fn hide_popup(app: AppHandle) {
     if let Some(window) = app.get_webview_window("popup") {
-        let _ = window.close();
+        hide_popup_window(&app, &window);
     }
 }
 
