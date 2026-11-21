@@ -58,6 +58,30 @@ function invoke(name, args = {}) {
   return Promise.resolve();
 }
 
+const appSheet = () => document.querySelector(".app");
+
+// Animate the glass sheet out of the window instead of dragging the whole
+// native window over the taskbar. The window clips it at the taskbar top.
+function closePopup() {
+  const sheet = appSheet();
+  if (!sheet || sheet.classList.contains("is-closing")) return;
+  sheet.classList.add("is-closing");
+  setTimeout(() => {
+    invoke("hide_popup").finally(() => sheet.classList.remove("is-closing"));
+  }, 190);
+}
+
+// Called when Rust shows the preloaded window, so a previous close animation
+// cannot make the next open slide in from the bottom.
+function resetPopup() {
+  const sheet = appSheet();
+  if (!sheet) return;
+  sheet.classList.add("no-transition");
+  sheet.classList.remove("is-closing");
+  void sheet.offsetWidth;
+  sheet.classList.remove("no-transition");
+}
+
 /// Subscribe to a Rust event without the npm API package.
 async function listen(event, handler) {
   if (!inTauri) return () => {};
@@ -129,7 +153,7 @@ function render(next) {
 }
 
 function wire() {
-  el("close").addEventListener("click", () => invoke("hide_popup"));
+  el("close").addEventListener("click", closePopup);
   ui.connectButton.addEventListener("click", () => invoke("connect"));
   el("disconnect-button")?.addEventListener("click", () => invoke("disconnect"));
 
@@ -164,13 +188,15 @@ function wire() {
   });
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") invoke("hide_popup");
+    if (event.key === "Escape") closePopup();
   });
 }
 
 async function start() {
   wire();
   await listen("state-changed", (event) => render(event.payload));
+  await listen("popup-opened", resetPopup);
+  await listen("popup-close-request", closePopup);
   const initial = inTauri
     ? await invoke("get_state")
     : {

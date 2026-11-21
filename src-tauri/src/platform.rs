@@ -51,7 +51,9 @@ pub fn popup_geometry() -> (i32, i32, i32) {
                 // Clamp both axes so a small display can never push the panel
                 // off screen (the old code only subtracted, no lower bound).
                 let x = (info.rcWork.right - width - margin).max(info.rcWork.left + margin);
-                let y = (info.rcWork.bottom - height - margin).max(info.rcWork.top + margin);
+                // No vertical margin: the sheet's bottom edge sits exactly on
+                // the taskbar top, which is where the slide-out clips it.
+                let y = (info.rcWork.bottom - height).max(info.rcWork.top);
                 return (x, y, info.rcWork.bottom);
             }
         }
@@ -65,7 +67,7 @@ pub fn popup_geometry() -> (i32, i32, i32) {
         let screen_y = GetSystemMetrics(SM_CYSCREEN);
         (
             (screen_x - width - 8).max(8),
-            (screen_y - height - 8).max(8),
+            (screen_y - height).max(0),
             screen_y,
         )
     }

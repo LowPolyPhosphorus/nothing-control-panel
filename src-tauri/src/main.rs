@@ -264,13 +264,27 @@ fn slide_popup<R: Runtime>(
     });
 }
 
-fn hide_popup_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
-    let Some(flag) = begin_animation(app) else {
+/// The frontend has already animated the sheet away; just hide the native
+/// window. Safe to call twice (the fallback timer races the JS callback).
+fn hide_popup_window<R: Runtime>(window: &WebviewWindow<R>) {
+    if !window.is_visible().unwrap_or(false) {
         return;
-    };
-    let (x, _, bottom) = platform::popup_geometry();
-    let current_y = window.outer_position().map(|position| position.y).unwrap_or(bottom);
-    slide_popup(window, x, current_y, bottom, true, flag);
+    }
+    let _ = window.hide();
+}
+
+/// Ask the frontend to play the slide-out, with a timer as a fallback in case
+/// the webview is unresponsive. The sheet clips at the taskbar top, so the
+/// native window never draws over the taskbar.
+fn request_hide_popup<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit("popup-close-request", ());
+    let watcher_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(260));
+        if let Some(window) = watcher_app.get_webview_window("popup") {
+            hide_popup_window(&window);
+        }
+    });
 }
 
 /// One watcher for the lifetime of the app. The window stays alive while
@@ -298,7 +312,7 @@ fn spawn_outside_watcher<R: Runtime>(app: AppHandle<R>) {
         };
         if platform::left_click_outside(hwnd) {
             info!("outside click -> close popup");
-            hide_popup_window(&app, &window);
+            request_hide_popup(&app);
         }
     });
 }
@@ -320,7 +334,7 @@ fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
     };
 
     if window.is_visible().unwrap_or(false) {
-        hide_popup_window(app, &window);
+        request_hide_popup(app);
         return;
     }
 
@@ -340,6 +354,8 @@ fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
         .map(|position| position.y)
         .unwrap_or(start_y);
     slide_popup(&window, x, actual_y, y, false, flag);
+    // Let the frontend clear a previous close animation before the new one.
+    let _ = app.emit("popup-opened", ());
     info!("popup opened at physical position ({x}, {y})");
 }
 
@@ -449,7 +465,7 @@ fn set_in_ear(app: AppHandle, enabled: bool) {
 #[tauri::command]
 fn hide_popup(app: AppHandle) {
     if let Some(window) = app.get_webview_window("popup") {
-        hide_popup_window(&app, &window);
+        hide_popup_window(&window);
     }
 }
 
