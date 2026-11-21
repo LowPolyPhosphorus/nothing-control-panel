@@ -77,6 +77,11 @@ struct DeviceManager {
     raw_log: bool,
     ack_target: Option<(u16, u8)>,
     ack_seen: bool,
+    /// Last ANC setting the user chose, confirmed by the device's ACK. This
+    /// firmware's ANC readback/push frames can stay stale after a write, so
+    /// they must not overwrite a choice we just confirmed. Cleared on
+    /// reconnect so a fresh device state can be read again.
+    anc_set: Option<(String, u8)>,
     connected_at: Option<Instant>,
     last_frame_at: Option<Instant>,
     waiting_notified: bool,
@@ -99,6 +104,7 @@ impl DeviceManager {
             raw_log,
             ack_target: None,
             ack_seen: false,
+            anc_set: None,
             connected_at: None,
             last_frame_at: None,
             waiting_notified: false,
@@ -170,6 +176,7 @@ impl DeviceManager {
         let was_connected = self.port.take().is_some();
         self.port_name.clear();
         self.ack_target = None;
+        self.anc_set = None;
         self.connected_at = None;
         self.last_frame_at = None;
         self.waiting_notified = false;
@@ -299,6 +306,7 @@ impl DeviceManager {
         self.retry_at = None;
         self.backoff = BASE_BACKOFF;
         self.op_id = 0;
+        self.anc_set = None;
         self.connected_at = Some(Instant::now());
         self.last_frame_at = None;
         self.waiting_notified = false;
@@ -457,6 +465,12 @@ impl DeviceManager {
                 }
             }
             proto::RESP_ANC | proto::PUSH_ANC => match proto::parse_anc(&frame.payload) {
+                Some(status) if self.anc_set.is_some() => {
+                    info!(
+                        "ignoring stale ANC report (mode={:?} strength={}), keeping confirmed {:?}",
+                        status.mode, status.strength, self.anc_set
+                    );
+                }
                 Some(status) => {
                     info!(
                         "ANC mode={:?} wire strength={} (UI level {})",
@@ -512,12 +526,18 @@ impl DeviceManager {
     ) {
         if self.port.is_none() {
             warn!("{label}: not connected");
+            if command == proto::CMD_SET_ANC {
+                self.anc_set = None;
+            }
             return;
         }
         for attempt in 1..=2 {
             let op_id = self.next_op_id();
             let frame = make_frame(op_id);
             if !self.write_frame(&frame) {
+                if command == proto::CMD_SET_ANC {
+                    self.anc_set = None;
+                }
                 return;
             }
             self.ack_target = Some((command, op_id));
@@ -529,15 +549,32 @@ impl DeviceManager {
             self.ack_target = None;
             if self.ack_seen {
                 info!("{label} acknowledged");
+                // The ACK confirms the write. Apply the requested ANC value
+                // ourselves; this firmware's readback can lag behind and must
+                // not flip the UI back to the old mode.
+                if command == proto::CMD_SET_ANC {
+                    if let Some((mode, strength)) = self.anc_set.clone() {
+                        patch_runtime(&self.app, |runtime| {
+                            runtime.anc_mode = mode;
+                            runtime.anc_strength = strength;
+                        });
+                    }
+                }
                 self.confirm_after_set(command);
                 return;
             }
             warn!("{label} ACK timeout (attempt {attempt}/2)");
             if self.port.is_none() {
+                if command == proto::CMD_SET_ANC {
+                    self.anc_set = None;
+                }
                 return;
             }
         }
         warn!("{label} failed after 2 attempts");
+        if command == proto::CMD_SET_ANC {
+            self.anc_set = None;
+        }
     }
 
     fn confirm_after_set(&mut self, command: u16) {
@@ -552,7 +589,7 @@ impl DeviceManager {
     }
 
     fn command_set_anc(&mut self, mode: String, strength: Option<u8>) {
-        let mode = match mode.as_str() {
+        let mode_value = match mode.as_str() {
             "anc" => AncMode::Anc,
             "transparency" => AncMode::Transparency,
             _ => AncMode::Off,
@@ -564,9 +601,17 @@ impl DeviceManager {
                 .map(|runtime| runtime.anc_strength)
                 .unwrap_or(1)
         });
+        let mode_label = match mode_value {
+            AncMode::Anc => "anc",
+            AncMode::Transparency => "transparency",
+            AncMode::Off => "off",
+        };
+        // Held until the ACK confirms the write, then published to the UI and
+        // protected from stale readback frames.
+        self.anc_set = Some((mode_label.to_string(), strength));
         self.send_set(
             proto::CMD_SET_ANC,
-            |op_id| proto::set_anc(op_id, mode, strength),
+            |op_id| proto::set_anc(op_id, mode_value, strength),
             "ANC",
         );
     }

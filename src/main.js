@@ -19,12 +19,9 @@ const ui = {
   statusLabel: el("status-label"),
   port: el("device-port"),
   firmware: el("device-firmware"),
-  pill: el("anc-pill"),
   strengthRow: el("strength-row"),
   inEar: el("in-ear"),
 };
-
-const ANC_ORDER = ["anc", "transparency", "off"];
 
 let state = null;
 
@@ -112,8 +109,6 @@ function render(next) {
   battery(next.right, "bar-right", "battery-right", "charge-right");
   battery(next.case_battery, "bar-case", "battery-case", "charge-case");
 
-  const index = Math.max(0, ANC_ORDER.indexOf(next.anc_mode));
-  ui.pill.style.setProperty("--anc-index", index);
   document.querySelectorAll("[data-anc]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.anc === next.anc_mode);
   });
