@@ -1,10 +1,8 @@
 const core = window.__TAURI__?.core;
 const events = window.__TAURI__?.event;
 
-// ANC strength levels are kept as raw 1..4 in state. ear-web's wire ordering is
-// odd (HIGH/MID/LOW/ADAPTIVE -> 4/5/3/6); keep that translation in ONE table
-// for the Bluetooth milestone instead of scattering it through the UI.
-const ANC_LEVEL_WIRE = [4, 5, 3, 6];
+// Raw ANC strengths (1..4) are the source of truth; the quirky ear-web UI
+// level translation lives in the Rust protocol module and has its own test.
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -13,6 +11,9 @@ const ui = {
   disconnected: el("disconnected"),
   connected: el("connected"),
   connectButton: el("connect-button"),
+  status: el("connection-status"),
+  port: el("device-port"),
+  firmware: el("device-firmware"),
   pill: el("anc-pill"),
   strengthRow: el("strength-row"),
   inEar: el("in-ear"),
@@ -53,6 +54,9 @@ function render(next) {
   ui.disconnected.hidden = next.connected;
   ui.connected.hidden = !next.connected;
   ui.connectButton.textContent = next.connected ? "Disconnect" : "Connect";
+  ui.status.textContent = next.status || (next.connected ? "Connected" : "Disconnected");
+  ui.port.textContent = next.port || "";
+  ui.firmware.textContent = next.firmware ? `FW ${next.firmware}` : "";
 
   battery(next.left, "bar-left", "battery-left", "charge-left");
   battery(next.right, "bar-right", "battery-right", "charge-right");
@@ -126,6 +130,9 @@ async function start() {
     : {
         device_name: "CMF BUDS PRO 2",
         connected: false,
+        status: "Not connected",
+        port: "",
+        firmware: "",
         left: { level: 0, charging: false, present: false },
         right: { level: 0, charging: false, present: false },
         case_battery: { level: 0, charging: false, present: false },

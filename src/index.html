@@ -28,7 +28,7 @@
           <div class="bud-ghost"></div>
         </div>
         <p class="disconnected__title">Not connected</p>
-        <p class="disconnected__hint">Open the case near your PC to reconnect.</p>
+        <p id="connection-status" class="disconnected__status">Searching for your buds…</p>
         <button id="connect-button" class="pill pill--primary">Connect</button>
       </section>
 
@@ -57,6 +57,11 @@
           <div class="battery battery--case"><div id="bar-case" class="battery__fill"></div></div>
           <span class="case__pct" id="battery-case">--</span>
           <span id="charge-case" class="case__charge" hidden>charging</span>
+        </div>
+
+        <div class="device-meta">
+          <span id="device-port">--</span>
+          <span id="device-firmware"></span>
         </div>
 
         <div class="panel">

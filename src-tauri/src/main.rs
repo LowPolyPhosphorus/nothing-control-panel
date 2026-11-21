@@ -1,14 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod device;
 mod platform;
+mod protocol;
 mod settings;
 mod state;
 
 use std::{
-    sync::Mutex,
+    sync::{mpsc::Sender, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use device::Command;
 use settings::Settings;
 use state::{AppRuntime, BatteryState, FrontendState};
 use tauri::{
@@ -41,6 +44,8 @@ fn main() {
     settings::init_logging(stored_settings.debug);
     info!("cmf-tray starting (debug={})", stored_settings.debug);
 
+    let (device_tx, device_rx) = std::sync::mpsc::channel::<Command>();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // Second launch just surfaces the existing app's popup.
@@ -48,6 +53,7 @@ fn main() {
         }))
         .manage(Mutex::new(stored_settings))
         .manage(Mutex::new(AppRuntime::default()))
+        .manage(Mutex::new(device_tx))
         .invoke_handler(tauri::generate_handler![
             get_state,
             connect,
@@ -59,17 +65,16 @@ fn main() {
             get_manual_com_port,
             set_manual_com_port,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            // One dedicated thread owns the serial port and its write queue.
+            device::spawn(app.app_handle().clone(), device_rx);
+
             let settings = app.state::<Mutex<Settings>>().lock().unwrap().clone();
 
             let connect_item = MenuItem::with_id(
                 app,
                 "connect",
-                if app.state::<Mutex<AppRuntime>>().lock().unwrap().connected {
-                    "Disconnect"
-                } else {
-                    "Connect"
-                },
+                "Connect",
                 true,
                 None::<&str>,
             )?;
@@ -101,8 +106,16 @@ fn main() {
                 })
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "connect" => {
-                        let connected = app.state::<Mutex<AppRuntime>>().lock().unwrap().connected;
-                        set_connected(app, !connected);
+                        let connected =
+                            app.state::<Mutex<AppRuntime>>().lock().unwrap().connected;
+                        send_command(
+                            app,
+                            if connected {
+                                Command::Disconnect
+                            } else {
+                                Command::Connect
+                            },
+                        );
                     }
                     "autostart" => toggle_autostart(app),
                     "quit" => app.exit(0),
@@ -116,6 +129,9 @@ fn main() {
                 autostart_item,
             });
             emit_state(app.app_handle());
+
+            // Auto-connect on launch using the remembered/last Bluetooth port.
+            send_command(app.app_handle(), Command::Connect);
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -139,6 +155,31 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn send_command(app: &AppHandle, command: Command) {
+    let sender = app.state::<Mutex<Sender<Command>>>();
+    let sender = sender.lock().unwrap();
+    if let Err(error) = sender.send(command) {
+        warn!("device command channel closed: {error}");
+    }
+}
+
+/// Single funnel for runtime mutations from the device thread: refresh the
+/// tray menu label and push a fresh snapshot to the frontend every time.
+pub(crate) fn patch_runtime(app: &AppHandle, change: impl FnOnce(&mut AppRuntime)) {
+    let connected = {
+        let runtime_state = app.state::<Mutex<AppRuntime>>();
+        let mut runtime = runtime_state.lock().unwrap();
+        change(&mut runtime);
+        runtime.connected
+    };
+    if let Some(handles) = app.try_state::<Handles>() {
+        let _ = handles
+            .connect_item
+            .set_text(if connected { "Disconnect" } else { "Connect" });
+    }
+    emit_state(app);
 }
 
 fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
@@ -214,45 +255,22 @@ fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
 
 fn build_state(app: &AppHandle) -> FrontendState {
     let settings = app.state::<Mutex<Settings>>().lock().unwrap().clone();
-    let runtime_state = app.state::<Mutex<AppRuntime>>();
-    let runtime = runtime_state.lock().unwrap();
-
-    let (left, right, case_battery) = if runtime.connected {
-        (
-            BatteryState {
-                level: 87,
-                charging: false,
-                present: true,
-            },
-            BatteryState {
-                level: 72,
-                charging: true,
-                present: true,
-            },
-            BatteryState {
-                level: 45,
-                charging: false,
-                present: true,
-            },
-        )
-    } else {
-        (
-            BatteryState::absent(),
-            BatteryState::absent(),
-            BatteryState::absent(),
-        )
-    };
+    let runtime = app
+        .state::<Mutex<AppRuntime>>()
+        .lock()
+        .unwrap()
+        .clone();
 
     FrontendState {
-        device_name: settings
-            .last_device
-            .clone()
-            .unwrap_or_else(|| "CMF Buds Pro 2".to_string()),
+        device_name: runtime.device_name,
         connected: runtime.connected,
-        left,
-        right,
-        case_battery,
-        anc_mode: runtime.anc_mode.clone(),
+        status: runtime.status,
+        port: runtime.port,
+        firmware: runtime.firmware,
+        left: runtime.left,
+        right: runtime.right,
+        case_battery: runtime.case_battery,
+        anc_mode: runtime.anc_mode,
         anc_strength: runtime.anc_strength,
         eq_preset: runtime.eq_preset,
         in_ear_detection: runtime.in_ear_detection,
@@ -266,33 +284,28 @@ fn emit_state(app: &AppHandle) {
     update_tooltip(app, &state);
 }
 
+fn percent(battery: &BatteryState) -> String {
+    if battery.present {
+        format!("{}%", battery.level)
+    } else {
+        "--".to_string()
+    }
+}
+
 fn update_tooltip(app: &AppHandle, state: &FrontendState) {
     let tooltip = if state.connected {
         format!(
-            "CMF Buds Pro 2  |  L {}%  R {}%  Case {}%",
-            state.left.level, state.right.level, state.case_battery.level
+            "CMF Buds Pro 2  |  L {}  R {}  Case {}",
+            percent(&state.left),
+            percent(&state.right),
+            percent(&state.case_battery)
         )
     } else {
-        "CMF Buds Pro 2 — disconnected".to_string()
+        format!("CMF Buds Pro 2 — {}", state.status)
     };
     if let Some(handles) = app.try_state::<Handles>() {
         let _ = handles.tray.set_tooltip(Some(tooltip));
     }
-}
-
-fn set_connected(app: &AppHandle, connected: bool) {
-    {
-        let runtime_state = app.state::<Mutex<AppRuntime>>();
-        let mut runtime = runtime_state.lock().unwrap();
-        runtime.connected = connected;
-    }
-    if let Some(handles) = app.try_state::<Handles>() {
-        let _ = handles
-            .connect_item
-            .set_text(if connected { "Disconnect" } else { "Connect" });
-    }
-    info!("connection state (fake): {connected}");
-    emit_state(app);
 }
 
 fn toggle_autostart(app: &AppHandle) {
@@ -320,48 +333,27 @@ fn get_state(app: AppHandle) -> FrontendState {
 
 #[tauri::command]
 fn connect(app: AppHandle) {
-    set_connected(&app, true);
+    send_command(&app, Command::Connect);
 }
 
 #[tauri::command]
 fn disconnect(app: AppHandle) {
-    set_connected(&app, false);
+    send_command(&app, Command::Disconnect);
 }
 
 #[tauri::command]
 fn set_anc(app: AppHandle, mode: String, strength: Option<u8>) {
-    {
-        let runtime_state = app.state::<Mutex<AppRuntime>>();
-        let mut runtime = runtime_state.lock().unwrap();
-        runtime.anc_mode = match mode.as_str() {
-            "transparency" | "anc" => mode,
-            _ => "off".to_string(),
-        };
-        if let Some(strength) = strength {
-            runtime.anc_strength = strength.clamp(1, 4);
-        }
-    }
-    emit_state(&app);
+    send_command(&app, Command::SetAnc { mode, strength });
 }
 
 #[tauri::command]
 fn set_eq(app: AppHandle, preset: u8) {
-    {
-        let runtime_state = app.state::<Mutex<AppRuntime>>();
-        let mut runtime = runtime_state.lock().unwrap();
-        runtime.eq_preset = preset.min(6);
-    }
-    emit_state(&app);
+    send_command(&app, Command::SetEq { preset });
 }
 
 #[tauri::command]
 fn set_in_ear(app: AppHandle, enabled: bool) {
-    {
-        let runtime_state = app.state::<Mutex<AppRuntime>>();
-        let mut runtime = runtime_state.lock().unwrap();
-        runtime.in_ear_detection = enabled;
-    }
-    emit_state(&app);
+    send_command(&app, Command::SetInEar { enabled });
 }
 
 #[tauri::command]
@@ -382,8 +374,12 @@ fn get_manual_com_port(app: AppHandle) -> Option<String> {
 
 #[tauri::command]
 fn set_manual_com_port(app: AppHandle, port: Option<String>) {
-    let settings_state = app.state::<Mutex<Settings>>();
-    let mut settings = settings_state.lock().unwrap();
-    settings.manual_com_port = port.filter(|value| !value.trim().is_empty());
-    settings::save(&settings);
+    {
+        let settings_state = app.state::<Mutex<Settings>>();
+        let mut settings = settings_state.lock().unwrap();
+        settings.manual_com_port = port.filter(|value| !value.trim().is_empty());
+        settings::save(&settings);
+    }
+    // Re-run discovery immediately so a manual override takes effect now.
+    send_command(&app, Command::Reconnect);
 }

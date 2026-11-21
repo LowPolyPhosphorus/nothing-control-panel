@@ -3,7 +3,13 @@
 
 use std::mem::size_of;
 
-use windows::core::w;
+use windows::core::{w, GUID, PCWSTR};
+use windows::Win32::Devices::DeviceAndDriverInstallation::{
+    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+    SetupDiGetDeviceInstanceIdW, SetupDiGetDeviceRegistryPropertyW, HDEVINFO,
+    SETUP_DI_REGISTRY_PROPERTY, SP_DEVINFO_DATA, DIGCF_PRESENT, GUID_DEVCLASS_BLUETOOTH,
+    GUID_DEVCLASS_PORTS, SPDRP_FRIENDLYNAME,
+};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -121,4 +127,148 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
         let _ = RegCloseKey(key);
         result
     }
+}
+
+/// Find the outgoing SPP COM port for a paired CMF/Nothing headset.
+///
+/// `serialport::available_ports()` reports Bluetooth ports as `Unknown` on
+/// Windows, so we pair two SetupAPI enumerations instead:
+///   1. the Bluetooth device whose friendly name is "CMF Buds Pro 2" gives us
+///      its 12-digit address from `BTHENUM\DEV_<address>\...`;
+///   2. the port device whose instance id contains that address and the SPP
+///      service class GUID gives us the COM number from its friendly name.
+pub fn bluetooth_serial_port() -> Option<String> {
+    let addresses: Vec<String> = enumerate_devices(&GUID_DEVCLASS_BLUETOOTH)
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.to_ascii_lowercase();
+            name.contains("cmf buds pro 2")
+                || name.contains("cmf buds")
+                || name.contains("b172")
+                || name.contains("b187")
+                || name.contains("b195")
+        })
+        .filter_map(|(_, instance)| bluetooth_address(instance))
+        .collect();
+
+    if addresses.is_empty() {
+        return None;
+    }
+
+    let mut spp_ports = Vec::new();
+    for (name, instance) in enumerate_devices(&GUID_DEVCLASS_PORTS) {
+        let upper = instance.to_ascii_uppercase();
+        if !upper.contains("{00001101-0000-1000-8000-00805F9B34FB}") {
+            continue;
+        }
+        let Some(com) = com_name(&name) else {
+            continue;
+        };
+        if addresses.iter().any(|address| upper.contains(address)) {
+            return Some(com);
+        }
+        spp_ports.push(com);
+    }
+
+    // Only use an unmatched SPP port when there is exactly one; otherwise it
+    // could belong to a different paired device.
+    if spp_ports.len() == 1 {
+        spp_ports.pop()
+    } else {
+        None
+    }
+}
+
+fn enumerate_devices(class: &GUID) -> Vec<(String, String)> {
+    let mut devices = Vec::new();
+    unsafe {
+        let Ok(set) = SetupDiGetClassDevsW(Some(class), PCWSTR::null(), None, DIGCF_PRESENT)
+        else {
+            return devices;
+        };
+        let mut index = 0u32;
+        loop {
+            let mut data = SP_DEVINFO_DATA {
+                cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
+                ..Default::default()
+            };
+            if SetupDiEnumDeviceInfo(set, index, &mut data).is_err() {
+                break;
+            }
+            index += 1;
+            devices.push((
+                registry_string(set, &data, SPDRP_FRIENDLYNAME),
+                instance_string(set, &data),
+            ));
+        }
+        let _ = SetupDiDestroyDeviceInfoList(set);
+    }
+    devices
+}
+
+unsafe fn registry_string(
+    set: HDEVINFO,
+    data: &SP_DEVINFO_DATA,
+    property: SETUP_DI_REGISTRY_PROPERTY,
+) -> String {
+    let mut required = 0u32;
+    let _ = SetupDiGetDeviceRegistryPropertyW(set, data, property, None, None, Some(&mut required));
+    if required == 0 {
+        return String::new();
+    }
+    let mut buffer = vec![0u8; required as usize];
+    if SetupDiGetDeviceRegistryPropertyW(
+        set,
+        data,
+        property,
+        None,
+        Some(&mut buffer),
+        Some(&mut required),
+    )
+    .is_err()
+    {
+        return String::new();
+    }
+    let words: Vec<u16> = buffer
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16_lossy(&words)
+        .trim_end_matches('\0')
+        .to_string()
+}
+
+unsafe fn instance_string(set: HDEVINFO, data: &SP_DEVINFO_DATA) -> String {
+    let mut required = 0u32;
+    let _ = SetupDiGetDeviceInstanceIdW(set, data, None, Some(&mut required));
+    if required == 0 {
+        return String::new();
+    }
+    let mut buffer = vec![0u16; required as usize];
+    if SetupDiGetDeviceInstanceIdW(set, data, Some(&mut buffer), Some(&mut required)).is_err() {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buffer)
+        .trim_end_matches('\0')
+        .to_string()
+}
+
+fn bluetooth_address(instance_id: &str) -> Option<String> {
+    let upper = instance_id.to_ascii_uppercase();
+    let start = upper.find("DEV_")? + 4;
+    let address = &upper[start..];
+    let end = address.find('\\')?;
+    let address = &address[..end];
+    (address.len() == 12 && address.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| address.to_string())
+}
+
+fn com_name(text: &str) -> Option<String> {
+    let upper = text.to_ascii_uppercase();
+    let start = upper.find("COM")? + 3;
+    let digits: String = upper[start..]
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    (!digits.is_empty()).then(|| format!("COM{digits}"))
 }

@@ -11,7 +11,10 @@ const LOG_FILE: &str = "cmf-tray.log";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Friendly name of the last connected device (informational).
     pub last_device: Option<String>,
+    /// COM port the last successful connection used, tried first on reconnect.
+    pub last_port: Option<String>,
     pub autostart: bool,
     pub manual_com_port: Option<String>,
     pub debug: bool,
@@ -21,6 +24,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             last_device: None,
+            last_port: None,
             autostart: false,
             manual_com_port: None,
             debug: false,
