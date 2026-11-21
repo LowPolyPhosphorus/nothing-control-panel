@@ -15,6 +15,8 @@ const ui = {
   connected: el("connected"),
   connectButton: el("connect-button"),
   status: el("connection-status"),
+  statusMessage: el("status-message"),
+  statusLabel: el("status-label"),
   port: el("device-port"),
   firmware: el("device-firmware"),
   pill: el("anc-pill"),
@@ -76,7 +78,14 @@ async function listen(event, handler) {
 
 function battery(value, barId, valueId, chargeId) {
   const present = !!value?.present;
-  el(barId).style.width = present ? `${Math.max(0, Math.min(100, value.level))}%` : "0%";
+  const level = Math.max(0, Math.min(100, value.level));
+  const ring = el(barId);
+  // The circular progress ring reads these CSS variables.
+  ring.style.setProperty("--level", present ? level : 0);
+  ring.style.setProperty(
+    "--ring-color",
+    level <= 20 ? "#ff9f0a" : "var(--accent)",
+  );
   el(valueId).textContent = present ? `${value.level}%` : "--";
   el(chargeId).hidden = !present || !value.charging;
 }
@@ -90,7 +99,12 @@ function render(next) {
   ui.disconnected.hidden = next.connected;
   ui.connected.hidden = !next.connected;
   ui.connectButton.textContent = next.connected ? "Disconnect" : "Connect";
-  ui.status.textContent = next.status || (next.connected ? "Connected" : "Disconnected");
+  if (ui.statusLabel) {
+    ui.statusLabel.textContent = next.connected ? "Connected" : "Not connected";
+  }
+  const statusText = next.status || (next.connected ? "Connected" : "Disconnected");
+  ui.status.textContent = statusText;
+  if (ui.statusMessage) ui.statusMessage.textContent = statusText;
   ui.port.textContent = next.port || "";
   ui.firmware.textContent = next.firmware ? `FW ${next.firmware}` : "";
 
@@ -121,9 +135,8 @@ function render(next) {
 
 function wire() {
   el("close").addEventListener("click", () => invoke("hide_popup"));
-  ui.connectButton.addEventListener("click", () =>
-    invoke(state?.connected ? "disconnect" : "connect"),
-  );
+  ui.connectButton.addEventListener("click", () => invoke("connect"));
+  el("disconnect-button")?.addEventListener("click", () => invoke("disconnect"));
 
   document.querySelectorAll("[data-anc]").forEach((button) => {
     button.addEventListener("click", () => {

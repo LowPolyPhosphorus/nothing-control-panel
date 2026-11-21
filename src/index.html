@@ -9,12 +9,28 @@
   </head>
   <body>
     <div class="app">
+      <!-- Soft colour blobs that refract through the glass, like Apple's
+           liquid-glass material picking up colour from behind the panel. -->
+      <div class="app__sheen" aria-hidden="true">
+        <span class="blob blob--one"></span>
+        <span class="blob blob--two"></span>
+        <span class="blob blob--three"></span>
+      </div>
+
       <header class="topbar">
         <div class="brand">
-          <span id="status-dot" class="brand__dot" aria-hidden="true"></span>
-          <span id="device-name" class="brand__name">CMF BUDS PRO 2</span>
+          <div class="brand__art" aria-hidden="true">
+            <img src="assets/case.webp" alt="" />
+          </div>
+          <div class="brand__text">
+            <span id="device-name" class="brand__name">CMF Buds Pro 2</span>
+            <span class="brand__sub">
+              <span id="status-dot" class="brand__dot" aria-hidden="true"></span>
+              <span id="status-label">Not connected</span>
+            </span>
+          </div>
         </div>
-        <button id="close" class="close" aria-label="Close" title="Close (Esc)">
+        <button id="close" class="glass-icon" aria-label="Close" title="Close (Esc)">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" />
           </svg>
@@ -23,9 +39,9 @@
 
       <!-- Disconnected view -->
       <section id="disconnected" class="view view--disconnected">
-        <div class="hero hero--muted" aria-hidden="true">
-          <div class="bud-ghost"></div>
-          <div class="bud-ghost"></div>
+        <div class="disconnected__art" aria-hidden="true">
+          <img src="assets/bud-left.webp" alt="" />
+          <img src="assets/bud-right.webp" alt="" />
         </div>
         <p class="disconnected__title">Not connected</p>
         <p id="connection-status" class="disconnected__status">Searching for your buds…</p>
@@ -34,89 +50,64 @@
 
       <!-- Connected view -->
       <section id="connected" class="view view--connected" hidden>
-        <div class="hero">
-          <div class="ear">
-            <img class="ear__img" src="assets/bud-left.webp" alt="Left earbud" />
-            <div class="ear__label">L</div>
-            <div class="battery"><div id="bar-left" class="battery__fill"></div></div>
-            <div class="ear__pct" id="battery-left">--</div>
-            <div id="charge-left" class="ear__charge" hidden>charging</div>
+        <!-- Battery: circular progress rings around the bud artwork -->
+        <div class="battery-row">
+          <div class="battery-card">
+            <div class="ring"><div id="bar-left" class="ring__progress"></div><img class="ring__art" src="assets/bud-left.webp" alt="" /></div>
+            <div class="battery-card__label">Left</div>
+            <div class="battery-card__pct"><span id="battery-left">--</span><span id="charge-left" class="bolt" hidden>⚡</span></div>
           </div>
-          <div class="ear">
-            <img class="ear__img" src="assets/bud-right.webp" alt="Right earbud" />
-            <div class="ear__label">R</div>
-            <div class="battery"><div id="bar-right" class="battery__fill"></div></div>
-            <div class="ear__pct" id="battery-right">--</div>
-            <div id="charge-right" class="ear__charge" hidden>charging</div>
+          <div class="battery-card">
+            <div class="ring"><div id="bar-case" class="ring__progress"></div><img class="ring__art" src="assets/case.webp" alt="" /></div>
+            <div class="battery-card__label">Case</div>
+            <div class="battery-card__pct"><span id="battery-case">--</span><span id="charge-case" class="bolt" hidden>⚡</span></div>
+          </div>
+          <div class="battery-card">
+            <div class="ring"><div id="bar-right" class="ring__progress"></div><img class="ring__art" src="assets/bud-right.webp" alt="" /></div>
+            <div class="battery-card__label">Right</div>
+            <div class="battery-card__pct"><span id="battery-right">--</span><span id="charge-right" class="bolt" hidden>⚡</span></div>
           </div>
         </div>
 
-        <div class="case">
-          <img class="case__img" src="assets/case.webp" alt="Charging case" />
-          <span class="case__label">CASE</span>
-          <div class="battery battery--case"><div id="bar-case" class="battery__fill"></div></div>
-          <span class="case__pct" id="battery-case">--</span>
-          <span id="charge-case" class="case__charge" hidden>charging</span>
-        </div>
-
-        <div class="device-meta">
-          <span id="device-port">--</span>
-          <span id="device-firmware"></span>
-        </div>
-
-        <div class="panel">
-          <div class="panel__title">NOISE CONTROL</div>
-          <div class="anc" role="group" aria-label="Noise control mode">
-            <div id="anc-pill" class="anc__pill" aria-hidden="true"></div>
-            <button class="anc__option" data-anc="anc" title="Noise cancellation">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M15.372 5.791a6.6 6.6 0 0 1 3.566 3.127c.528 1.274.666 2.675.397 4.027-.269 1.352-.933 2.593-1.908 3.568-.34.34-.34.892 0 1.232.34.34.892.34 1.232 0a9.7 9.7 0 0 0 2.384-4.46c.336-1.69.164-3.441-.495-5.033a9.4 9.4 0 0 0-3.209-3.91A9.6 9.6 0 0 0 11.5 2.874a9.6 9.6 0 0 0-4.84 1.468 9.4 9.4 0 0 0-3.208 3.91c-.659 1.592-.832 3.343-.496 5.033a9.7 9.7 0 0 0 2.384 4.46c.34.34.892.34 1.232 0s.34-.892 0-1.232a6.6 6.6 0 0 1-1.907-3.568 6.6 6.6 0 0 1 .397-4.027 6.6 6.6 0 0 1 3.566-3.127 6.4 6.4 0 0 1 4.744 0zm-2.379 5.67a1.494 1.494 0 1 1-2.986 0 1.494 1.494 0 0 1 2.986 0z" />
-              </svg>
-            </button>
-            <button class="anc__option" data-anc="transparency" title="Transparency">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="13" r="2" />
-                <circle cx="12" cy="4" r="1" />
-                <circle cx="16.5" cy="5.2" r="1" />
-                <circle cx="19.8" cy="8.5" r="1" />
-                <circle cx="21" cy="13" r="1" />
-                <circle cx="19.8" cy="17.5" r="1" />
-                <circle cx="16.5" cy="20.8" r="1" />
-                <circle cx="12" cy="22" r="1" />
-                <circle cx="7.5" cy="20.8" r="1" />
-                <circle cx="4.2" cy="17.5" r="1" />
-                <circle cx="3" cy="13" r="1" />
-                <circle cx="4.2" cy="8.5" r="1" />
-                <circle cx="7.5" cy="5.2" r="1" />
-              </svg>
-            </button>
-            <button class="anc__option" data-anc="off" title="Off">
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5.745 4.543L4.433 3.244a1.13 1.13 0 0 0-1.594 0 1.105 1.105 0 0 0 0 1.594l1.766 1.75A9.7 9.7 0 0 0 3.851 8.13a10 10 0 0 0-.478 4.802 9.8 9.8 0 0 0 2.298 5.255 1.13 1.13 0 0 0 1.594 0 1.105 1.105 0 0 0 0-1.594 7.6 7.6 0 0 1-1.245-3.986 7.5 7.5 0 0 1 1.38-4.84l3.848 3.81a1.72 1.72 0 0 0 1.696 1.617h.084l6.038 5.978a1.13 1.13 0 0 0 1.594 0 1.105 1.105 0 0 0 0-1.594l-13-12.89z" />
-                <path d="M19.237 14.772a9.7 9.7 0 0 0 .602-1.84 10 10 0 0 0-.478-4.802 9.4 9.4 0 0 0-3.091-3.729A9.6 9.6 0 0 0 11.606 3a9.9 9.9 0 0 0-3.497.755l1.289 1.277a7.6 7.6 0 0 1 2.208-.37 7.5 7.5 0 0 1 3.731 1.121 7.4 7.4 0 0 1 2.473 2.983 7.5 7.5 0 0 1 .382 2.841 7.7 7.7 0 0 1-.244 1.889l1.289 1.276z" />
-              </svg>
-            </button>
+        <!-- Noise control, styled after the reference's settingsControls -->
+        <div class="glass-group">
+          <div class="group-head">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h2l2-6 3 12 3-9 2 6 2-3h4" /></svg>
+            <span>Noise control</span>
           </div>
-          <div class="anc__labels" aria-hidden="true">
-            <span>NOISE<br />CANCELLING</span>
-            <span>TRANSPARENCY</span>
-            <span>Off</span>
+          <div id="anc-pill" class="anc__pill" aria-hidden="true"></div>
+          <div class="mode-row" role="group" aria-label="Noise control mode">
+            <button class="mode" data-anc="anc">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.372 5.791a6.6 6.6 0 0 1 3.566 3.127c.528 1.274.666 2.675.397 4.027-.269 1.352-.933 2.593-1.908 3.568-.34.34-.34.892 0 1.232.34.34.892.34 1.232 0a9.7 9.7 0 0 0 2.384-4.46c.336-1.69.164-3.441-.495-5.033a9.4 9.4 0 0 0-3.209-3.91 9.6 9.6 0 0 0-4.744-1.468 9.6 9.6 0 0 0-4.84 1.468 9.4 9.4 0 0 0-3.208 3.91c-.659 1.592-.832 3.343-.496 5.033a9.7 9.7 0 0 0 2.384 4.46c.34.34.892.34 1.232 0s.34-.892 0-1.232a6.6 6.6 0 0 1-1.907-3.568 6.6 6.6 0 0 1 .397-4.027 6.6 6.6 0 0 1 3.566-3.127 6.4 6.4 0 0 1 4.744 0zm-2.379 5.67a1.494 1.494 0 1 1-2.986 0 1.494 1.494 0 0 1 2.986 0z" /></svg>
+              <span>ANC</span>
+            </button>
+            <button class="mode" data-anc="transparency">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2" /><path d="M12 3a9 9 0 0 0 0 18M12 7a5 5 0 0 0 0 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
+              <span>Transparency</span>
+            </button>
+            <button class="mode" data-anc="off">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.745 4.543L4.433 3.244a1.13 1.13 0 0 0-1.594 0 1.105 1.105 0 0 0 0 1.594l1.766 1.75A9.7 9.7 0 0 0 3.851 8.13a10 10 0 0 0-.478 4.802 9.8 9.8 0 0 0 2.298 5.255 1.13 1.13 0 0 0 1.594 0 1.105 1.105 0 0 0 0-1.594 7.6 7.6 0 0 1-1.245-3.986 7.5 7.5 0 0 1 1.38-4.84l3.848 3.81a1.72 1.72 0 0 0 1.696 1.617h.084l6.038 5.978a1.13 1.13 0 0 0 1.594 0 1.105 1.105 0 0 0 0-1.594l-13-12.89z" /><path d="M19.237 14.772a9.7 9.7 0 0 0 .602-1.84 10 10 0 0 0-.478-4.802 9.4 9.4 0 0 0-3.091-3.729A9.6 9.6 0 0 0 11.606 3a9.9 9.9 0 0 0-3.497.755l1.289 1.277a7.6 7.6 0 0 1 2.208-.37 7.5 7.5 0 0 1 3.731 1.121 7.4 7.4 0 0 1 2.473 2.983 7.5 7.5 0 0 1 .382 2.841 7.7 7.7 0 0 1-.244 1.889l1.289 1.276z" /></svg>
+              <span>Off</span>
+            </button>
           </div>
           <div id="strength-row" class="strength" hidden>
+            <div class="strength__label">ANC strength</div>
             <div class="strength__dots" role="group" aria-label="Noise cancelling level">
-              <button class="strength__dot" data-strength="1" title="Level 1"><i></i></button>
-              <button class="strength__dot" data-strength="2" title="Level 2"><i></i></button>
-              <button class="strength__dot" data-strength="3" title="Level 3"><i></i></button>
-              <button class="strength__dot" data-strength="4" title="Level 4"><i></i></button>
+              <button class="strength__dot" data-strength="1">1</button>
+              <button class="strength__dot" data-strength="2">2</button>
+              <button class="strength__dot" data-strength="3">3</button>
+              <button class="strength__dot" data-strength="4">4</button>
             </div>
-            <div class="strength__captions" aria-hidden="true">
-              <span>HIGH</span><span>MID</span><span>LOW</span><span>ADAPTIVE</span>
-            </div>
+            <div class="strength__captions" aria-hidden="true"><span>HIGH</span><span>MID</span><span>LOW</span><span>ADAPTIVE</span></div>
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel__title">EQUALIZER</div>
+        <!-- Equalizer -->
+        <div class="glass-group">
+          <div class="group-head">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="8" cy="18" r="2" /></svg>
+            <span>Equalizer</span>
+          </div>
           <div class="eq" role="group" aria-label="Equalizer preset">
             <button data-eq="0">Dirac OPTEO</button>
             <button data-eq="3">POP</button>
@@ -128,10 +119,16 @@
           </div>
         </div>
 
-        <div class="panel">
-          <div class="panel__title">QUICK SETTINGS</div>
-          <div class="switch-row">
-            <span>In Ear Detection</span>
+        <!-- Quick settings -->
+        <div class="glass-group glass-group--tight">
+          <div class="setting-row">
+            <div class="setting-row__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.2" /><path d="M5.5 19a6.5 6.5 0 0 1 13 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" /></svg>
+            </div>
+            <div class="setting-row__text">
+              <span>In-ear detection</span>
+              <small>Pause when removed</small>
+            </div>
             <label class="switch">
               <input id="in-ear" type="checkbox" />
               <span class="switch__track"><span class="switch__thumb"></span></span>
@@ -139,6 +136,12 @@
           </div>
         </div>
 
+        <div class="status-row">
+          <span class="status-row__dot" aria-hidden="true"></span>
+          <span id="status-message">Connected</span>
+        </div>
+        <button id="disconnect-button" class="glass-action">Disconnect</button>
+        <div class="device-meta"><span id="device-port"></span><span id="device-firmware"></span></div>
         <footer class="footer">Unofficial companion · ear (web) protocol</footer>
       </section>
       <div id="toast" class="toast" hidden></div>

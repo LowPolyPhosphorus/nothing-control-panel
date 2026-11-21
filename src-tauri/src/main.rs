@@ -203,9 +203,9 @@ fn toggle_popup<R: Runtime>(app: &AppHandle<R>) {
     let (x, y) = platform::popup_position();
     let window = match WebviewWindowBuilder::new(app, "popup", WebviewUrl::App("index.html".into()))
         .title("CMF Buds Pro 2")
-        .inner_size(360.0, 640.0)
-        .min_inner_size(360.0, 640.0)
-        .max_inner_size(360.0, 640.0)
+        .inner_size(360.0, 720.0)
+        .min_inner_size(360.0, 720.0)
+        .max_inner_size(360.0, 720.0)
         .resizable(false)
         .decorations(false)
         .transparent(true)
