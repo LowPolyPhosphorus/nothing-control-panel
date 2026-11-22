@@ -219,8 +219,8 @@ fn create_popup_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewW
         warn!("failed to round popup window: {error}");
     }
     match platform::apply_popup_backdrop(&window) {
-        Ok(()) => info!("native acrylic backdrop applied to popup"),
-        Err(error) => warn!("failed to apply acrylic backdrop: {error}"),
+        Ok(()) => info!("native blur backdrop applied to popup"),
+        Err(error) => warn!("failed to apply blur backdrop: {error}"),
     }
 
     Ok(window)

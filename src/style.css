@@ -14,7 +14,7 @@
   --dim: rgba(255, 255, 255, 0.44);
   --card: rgba(255, 255, 255, 0.035);
   /* Native acrylic already lightens the backdrop; keep this veil subtle. */
-  --glass: rgba(255, 255, 255, 0.06);
+  --glass: rgba(255, 255, 255, 0.04);
   --hairline: rgba(255, 255, 255, 0.08);
   /* Match the native Windows 11 rounded-corner radius. A larger CSS radius
      leaves un-veiled acrylic outside the web content but inside the HWND, which

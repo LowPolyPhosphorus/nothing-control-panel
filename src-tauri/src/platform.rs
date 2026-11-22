@@ -61,7 +61,7 @@ extern "system" {
 
 const WCA_ACCENT_POLICY: u32 = 19;
 const ACCENT_DISABLED: u32 = 0;
-const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+const ACCENT_ENABLE_BLURBEHIND: u32 = 3;
 
 unsafe fn set_accent(hwnd: isize, state: u32, gradient_color: u32) {
     // This API is undocumented and absent from user32.lib, so resolve it at
@@ -119,9 +119,11 @@ pub fn apply_popup_backdrop<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), String> {
     let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
-    // 0x14FFFFFF is a very light white tint in ABGR order; the rest of the
-    // colour comes from the CSS veil on top of the blurred desktop.
-    unsafe { set_accent(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, 0x14FFFFFF) }
+    // Plain blur-behind is slightly weaker than full acrylic and keeps much
+    // more background contrast, which makes the glass read as less blurry and
+    // less milky. 0x08FFFFFF is only a faint tint in ABGR order; the rest of
+    // the colour comes from the CSS veil.
+    unsafe { set_accent(hwnd, ACCENT_ENABLE_BLURBEHIND, 0x08FFFFFF) }
     Ok(())
 }
 
