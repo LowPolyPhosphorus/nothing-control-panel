@@ -222,6 +222,9 @@ fn create_popup_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewW
         Ok(()) => info!("native acrylic backdrop applied to popup"),
         Err(error) => warn!("failed to apply acrylic backdrop: {error}"),
     }
+    if let Err(error) = platform::configure_popup_shape(&window) {
+        warn!("failed to round popup window: {error}");
+    }
 
     // Windows swaps the transient/acrylic backdrop for a flat wallpaper-derived
     // material as soon as the popup loses focus (a notification is enough).

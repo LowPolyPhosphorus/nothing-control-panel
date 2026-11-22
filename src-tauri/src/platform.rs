@@ -12,13 +12,14 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows::Win32::Foundation::{HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    CreateRoundRectRgn, GetMonitorInfoW, MonitorFromPoint, SetWindowRgn, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::System::Registry::{
     RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
     KEY_ALL_ACCESS, REG_SZ,
 };
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, GetWindowRect, SM_CXSCREEN, SM_CYSCREEN,
@@ -88,6 +89,47 @@ unsafe fn set_accent(hwnd: isize, state: u32, gradient_color: u32) {
         data_size: size_of::<AccentPolicy>(),
     };
     function(hwnd as *mut std::ffi::c_void, &mut data);
+}
+
+/// The accent policy fills the whole HWND rectangle. CSS `border-radius` only
+/// rounds the web content, leaving square acrylic patches in the corners. Clip
+/// the native window itself to the same 8px radius as `.app`.
+unsafe fn apply_rounded_region(hwnd_ptr: isize) {
+    // Tauri's `HWND` comes from a different `windows` crate version than our
+    // direct dependency, so pass the raw pointer across the boundary.
+    let hwnd = HWND(hwnd_ptr as *mut std::ffi::c_void);
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return;
+    }
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    // Keep the window region in sync with `.app`'s --radius and Windows' own
+    // DWMWCP_ROUND radius; a larger region would leave an invisible clickable
+    // border around the drawn panel.
+    let radius = ((8.0 * GetDpiForWindow(hwnd) as f32 / 96.0).round() as i32).max(1);
+    let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
+    if region.0.is_null() {
+        return;
+    }
+    // On success the window owns the region; on failure there is nothing useful
+    // to recover, and leaking one tiny region is preferable to a dangling GDI
+    // handle.
+    let _ = SetWindowRgn(hwnd, Some(region), true);
+}
+
+/// Shape the window region once so clicks in the rounded-corner cutouts pass
+/// through instead of landing on an invisible square corner. The accent blur is
+/// applied separately because it must be refreshed on focus changes.
+pub fn configure_popup_shape<R: tauri::Runtime>(
+    window: &tauri::WebviewWindow<R>,
+) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    unsafe { apply_rounded_region(hwnd) }
+    Ok(())
 }
 
 pub fn apply_popup_backdrop<R: tauri::Runtime>(
