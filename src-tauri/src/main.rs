@@ -39,6 +39,9 @@ struct UiHandles<R: Runtime> {
 struct PopupState {
     /// Prevents a tray click racing an in-flight slide animation.
     animating: Arc<AtomicBool>,
+    /// True while the sheet is sliding out, so focus events cannot restore the
+    /// backdrop and leave a blank glass rectangle behind it.
+    closing: Arc<AtomicBool>,
 }
 
 fn main() {
@@ -219,6 +222,31 @@ fn create_popup_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<WebviewW
         Ok(()) => info!("native acrylic backdrop applied to popup"),
         Err(error) => warn!("failed to apply acrylic backdrop: {error}"),
     }
+
+    // Windows swaps the transient/acrylic backdrop for a flat wallpaper-derived
+    // material as soon as the popup loses focus (a notification is enough).
+    // Re-selecting the backdrop on focus changes restores the live desktop blur.
+    let focus_window = window.clone();
+    let focus_app = app.clone();
+    window.on_window_event(move |event| {
+        if !matches!(event, tauri::WindowEvent::Focused(_))
+            || !focus_window.is_visible().unwrap_or(false)
+        {
+            return;
+        }
+        let closing = focus_app
+            .state::<Mutex<PopupState>>()
+            .lock()
+            .unwrap()
+            .closing
+            .clone();
+        if closing.load(Ordering::SeqCst) {
+            return;
+        }
+        platform::clear_popup_backdrop(&focus_window);
+        let _ = platform::apply_popup_backdrop(&focus_window);
+    });
+
     Ok(window)
 }
 
@@ -272,11 +300,16 @@ fn slide_popup<R: Runtime>(
 
 /// The frontend has already animated the sheet away; just hide the native
 /// window. Safe to call twice (the fallback timer races the JS callback).
-fn hide_popup_window<R: Runtime>(window: &WebviewWindow<R>) {
+fn hide_popup_window<R: Runtime>(app: &AppHandle<R>, window: &WebviewWindow<R>) {
     if !window.is_visible().unwrap_or(false) {
         return;
     }
     let _ = window.hide();
+    app.state::<Mutex<PopupState>>()
+        .lock()
+        .unwrap()
+        .closing
+        .store(false, Ordering::SeqCst);
 }
 
 /// Ask the frontend to play the slide-out, with a timer as a fallback in case
@@ -287,6 +320,11 @@ fn request_hide_popup<R: Runtime>(app: &AppHandle<R>) {
         // The sheet slides out inside the window. Remove the window-level
         // backdrop first so no empty blurred rectangle is left behind while
         // the content animates away.
+        app.state::<Mutex<PopupState>>()
+            .lock()
+            .unwrap()
+            .closing
+            .store(true, Ordering::SeqCst);
         platform::clear_popup_backdrop(&window);
     }
     let _ = app.emit("popup-close-request", ());
@@ -294,7 +332,7 @@ fn request_hide_popup<R: Runtime>(app: &AppHandle<R>) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(260));
         if let Some(window) = watcher_app.get_webview_window("popup") {
-            hide_popup_window(&window);
+            hide_popup_window(&watcher_app, &window);
         }
     });
 }
@@ -480,7 +518,7 @@ fn set_in_ear(app: AppHandle, enabled: bool) {
 #[tauri::command]
 fn hide_popup(app: AppHandle) {
     if let Some(window) = app.get_webview_window("popup") {
-        hide_popup_window(&window);
+        hide_popup_window(&app, &window);
     }
 }
 

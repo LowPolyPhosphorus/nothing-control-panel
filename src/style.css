@@ -73,9 +73,11 @@ button {
      transparent window, so this has no effect there but is harmless. */
   -webkit-backdrop-filter: blur(56px) saturate(180%);
   backdrop-filter: blur(56px) saturate(180%);
-  /* No window-like outline: only a soft outside shadow. */
+  /* No outline and no drop shadow: inside a transparent window the shadow is
+     clipped by the window rect, leaving dark square patches at the rounded
+     corners. The native acrylic provides the depth instead. */
   border: 0;
-  box-shadow: 0 18px 56px rgba(0, 0, 0, 0.24);
+  box-shadow: none;
   /* Closing slides the sheet down inside the window; the transparent window
      clips it exactly at the taskbar top instead of drawing over the taskbar. */
   transition: transform 190ms cubic-bezier(0.32, 0.72, 0, 1), opacity 190ms ease;

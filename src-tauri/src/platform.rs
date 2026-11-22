@@ -26,17 +26,84 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 /// A transparent WebView2 window has no desktop content in its own backdrop,
 /// so CSS `backdrop-filter` samples only transparent pixels and does nothing.
-/// The real blur has to be applied to the HWND by DWM. `apply_acrylic` uses the
-/// Windows 11 transient-window backdrop (the same material flyouts use) and
-/// falls back to ACCENT_ENABLE_ACRYLICBLURBEHIND on older builds.
+/// The real blur has to be applied to the HWND by DWM.
+///
+/// We use the undocumented `SetWindowCompositionAttribute` accent policy rather
+/// than Windows 11's `DWMWA_SYSTEMBACKDROP_TYPE`: the system backdrop is dropped
+/// whenever the window loses activation (a notification is enough), which made
+/// the glass collapse into a flat wallpaper-coloured rectangle. The accent
+/// policy keeps sampling the desktop while the popup is inactive.
+#[repr(C)]
+struct AccentPolicy {
+    state: u32,
+    flags: u32,
+    gradient_color: u32,
+    animation_id: u32,
+}
+
+#[repr(C)]
+struct CompositionAttributeData {
+    attribute: u32,
+    data: *mut std::ffi::c_void,
+    data_size: usize,
+}
+
+type SetCompositionAttribute =
+    unsafe extern "system" fn(*mut std::ffi::c_void, *mut CompositionAttributeData) -> i32;
+
+extern "system" {
+    fn LoadLibraryA(name: *const i8) -> *mut std::ffi::c_void;
+    fn GetProcAddress(module: *mut std::ffi::c_void, name: *const i8) -> *mut std::ffi::c_void;
+}
+
+const WCA_ACCENT_POLICY: u32 = 19;
+const ACCENT_DISABLED: u32 = 0;
+const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
+
+unsafe fn set_accent(hwnd: isize, state: u32, gradient_color: u32) {
+    // This API is undocumented and absent from user32.lib, so resolve it at
+    // runtime instead of linking against it directly.
+    let module = LoadLibraryA(b"user32.dll\0".as_ptr() as *const i8);
+    if module.is_null() {
+        return;
+    }
+    let address = GetProcAddress(
+        module,
+        b"SetWindowCompositionAttribute\0".as_ptr() as *const i8,
+    );
+    if address.is_null() {
+        return;
+    }
+    let function: SetCompositionAttribute = std::mem::transmute(address);
+
+    let mut policy = AccentPolicy {
+        state,
+        flags: 0,
+        gradient_color,
+        animation_id: 0,
+    };
+    let mut data = CompositionAttributeData {
+        attribute: WCA_ACCENT_POLICY,
+        data: &mut policy as *mut AccentPolicy as *mut std::ffi::c_void,
+        data_size: size_of::<AccentPolicy>(),
+    };
+    function(hwnd as *mut std::ffi::c_void, &mut data);
+}
+
 pub fn apply_popup_backdrop<R: tauri::Runtime>(
     window: &tauri::WebviewWindow<R>,
 ) -> Result<(), String> {
-    window_vibrancy::apply_acrylic(window, None).map_err(|error| error.to_string())
+    let hwnd = window.hwnd().map_err(|error| error.to_string())?.0 as isize;
+    // 0x14FFFFFF is a very light white tint in ABGR order; the rest of the
+    // colour comes from the CSS veil on top of the blurred desktop.
+    unsafe { set_accent(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, 0x14FFFFFF) }
+    Ok(())
 }
 
 pub fn clear_popup_backdrop<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    let _ = window_vibrancy::clear_acrylic(window);
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe { set_accent(hwnd.0 as isize, ACCENT_DISABLED, 0) }
+    }
 }
 
 const POPUP_WIDTH: f32 = 360.0;
